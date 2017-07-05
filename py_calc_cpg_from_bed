@@ -1,0 +1,90 @@
+import csv
+import pandas as pd
+import pybedtools
+from pybedtools import BedTool
+from pybedtools import featurefuncs
+#set tmp dir
+pybedtools.set_tempdir('/loc/scratch/pskene')
+
+def py_calc_cpg_from_bed(bedfile, extend_from_midpoint=True, distance_to_extend=150, species='hg19',
+                         whole_genome_fasta_file='/shared/biodata/ngs/Reference/iGenomes/Homo_sapiens/UCSC/hg19/Sequence/WholeGenomeFasta/genome.fa'):
+    '''
+     written by peteskene@gmail.com
+     
+     (1) takes in a bed file (can have any number of columns).
+             - optionally finds midpoint and extends features (requires chr_sizes file found from species string)
+             - optionally just extends each feature (requires chr_sizes file found from species string)
+             
+     (2) extract sequence data as a fasta file (requires path to whole_genome_fasta_file; entered as a string)
+	     fasta file has no text wrapping (i.e. entire sequence for an id is on one line)
+     
+     (3) for each each feature in the fasta file it:
+             - counts number of observed CpG dinucleotides
+             - calculates the expected number of CpG (#C * #G)/length of sequence
+             - calculates CpG observed/expected
+             
+     (4) inserts the CpG o/e into the original supplied bedfile and returns this as a pandas dataframe. 
+     
+     Note that the calculated CpG o/e is for the genomic region specified by the supplied parameters (e.g. extending flanks),
+     but the original bed file co-ordinates are returned
+             
+    
+    '''
+    
+    temp_bed = BedTool(bedfile)
+    
+    print 'bedfile imported: ' + bedfile
+#     print temp_bed
+    print 
+    
+    if extend_from_midpoint==True:
+        if distance_to_extend==None:
+            return 'Exiting... extend_from midpoint set to True but no distance specified'
+        temp_bed = temp_bed.each(featurefuncs.midpoint).slop(genome=species, b=distance_to_extend)
+        print 'Found midpoint of each feature and extended symmetrically'
+        
+    if extend_from_midpoint==False:
+        if distance_to_extend!=None:
+            temp_bed = temp_bed.slop(genome=species, b=distance_to_extend)
+            print 'Extended symmetrically from ends of supplied bedfile'
+    
+#     print temp_bed
+    print
+    
+    print 'Extracting sequence data for # of features: ' + str(temp_bed.count())
+    
+    #find sequence data
+    temp_file = temp_bed.sequence(fi=whole_genome_fasta_file)
+
+    #emtpy list to be populated with CpG o/e from the fasta file
+    list_cpg_oe = []
+    
+    with open(temp_file.seqfn) as myfile:
+        for line in myfile:
+            if not line.startswith('>'): #skips identifier line for each fasta feature; expects no text wrapping
+                count_cpg = line.upper().count('CG')
+                
+                calc_expected = float(line.upper().count('C') * line.upper().count('G')) / len(line)
+                                
+                if calc_expected==0: #avoid zero division error
+                    cpg_oe = 0
+                else:
+                    cpg_oe = float(count_cpg)/calc_expected
+                
+                list_cpg_oe.append(cpg_oe)
+#                 print 'count cpg: ' + str(count_cpg)
+#                 print 'count_c_and_g: ' + str(count_c_and_g)
+#                 print 'calc_expected: ' + str(calc_expected)
+#                 print 'cpg_oe: ' + str(cpg_oe)
+#                 print
+    
+    if temp_bed.count()!=len(list_cpg_oe):
+        return 'Exiting... unmatched number of features and calculated CpG o/e values; suspected error'
+    
+    print 'Returning bed file with original co-ordinates and CpG o/e for the region specified by parameters'
+    
+    #convert original bedfile to dataframe and insert CpG o/e colunmn
+    temp_df = BedTool(bedfile).to_dataframe()
+    temp_df['CpG o/e'] = list_cpg_oe
+
+    return temp_df
